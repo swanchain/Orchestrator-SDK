@@ -19,7 +19,9 @@ from swan.object import (
     TaskRenewalResult, 
     TaskTerminationMessage,
     PaymentResult,
-    TaskDetail
+    TaskDetail,
+    GPUSelectionList,
+    CustomInstanceResult
 )
 from swan.common.utils import validate_ip_or_cidr
 
@@ -87,25 +89,29 @@ class Orchestrator(OrchestratorAPIClient):
             repo_branch=None,
             wallet_address=None, 
             instance_type=None,
+            custom_instance=None
         ):
         try:
-            if not instance_type:
-                raise SwanAPIException(f"Invalid instance_type")
-            
-            hardware_id = self.get_instance_hardware_id(instance_type)
-            if hardware_id is None:
-                raise SwanAPIException(f"Invalid instance_type {instance_type}")
-            
             if not wallet_address:
                 raise SwanAPIException(f"No wallet_address provided")
 
             params = {
                 "wallet_address": wallet_address,
-                "hardware_id": hardware_id,
                 "repo_uri": repo_uri,
                 "repo_branch": repo_branch,
-                "dp": "true"
+                "dp": "true",
             }
+
+            if custom_instance:
+                params["custom_instance"] = json.dumps(custom_instance)
+            elif instance_type:
+                hardware_id = self.get_instance_hardware_id(instance_type)
+                if hardware_id is None:
+                    raise SwanAPIException(f"Invalid instance_type {instance_type}")
+                params["hardware_id"] = hardware_id
+            else:
+                raise SwanAPIException(f"Missing instance_type or custom_instance")
+                
             response = self._request_with_params(POST, GET_SOURCE_URI, self.swan_url, params, self.token, None)
             job_source_uri = ""
             if response and response.get('data'):
@@ -201,6 +207,50 @@ class Orchestrator(OrchestratorAPIClient):
         except:
             logging.error(f"Undefined instance type {instance_type}.")
             return None
+        
+    def get_gpu_selection_list(self, region):
+        try:
+            params = {
+                "region": region,
+            }
+            response = self._request_with_params(GET, GET_GPU_SELECTION_LIST, self.swan_url, params, self.token, None)
+            return GPUSelectionList.load_from_resp(response)
+        except Exception:
+            logging.error("Failed to fetch gpu selection list.")
+            return None
+
+    def get_custom_instance_result(self, custom_instance: Optional[dict] = {}, region: Optional[str] = 'global'):
+        try:
+            gpu_model = custom_instance.get("gpu_model")
+            gpu_count = custom_instance.get("gpu_count", 1)
+
+            try:
+                cpu = int(custom_instance.get("cpu", 2))
+                memory = int(custom_instance.get("memory", 2))
+                storage = int(custom_instance.get("storage", 5))
+            except Exception as e:
+                logging.error("Incorrect type of input, cpu, memory and storage should be integer")
+            
+            params = {
+                "cpu": cpu,
+                "memory": memory,
+                "storage": storage,
+            }
+
+            if gpu_model:
+                params["gpu_model"] = gpu_model
+                params["gpu_count"] = gpu_count
+
+            if region:
+                params["region"] = region
+
+            response = self._request_with_params(POST, CUSTOM_INSTANCE, self.swan_url, params, self.token, None)
+            return CustomInstanceResult.load_from_resp(response)
+        except Exception:
+            logging.error("Failed to fetch custom instance info.")
+            return None
+
+
 
     def terminate_task(self, task_uuid: str) -> Optional[TaskTerminationMessage]:
         """
@@ -294,7 +344,8 @@ class Orchestrator(OrchestratorAPIClient):
             private_key: Optional[str] = None,
             start_in: Optional[int] = 300,
             preferred_cp_list: Optional[List[str]] = None,
-            ip_whitelist: Optional[List[str]] = None
+            ip_whitelist: Optional[List[str]] = None,
+            custom_instance: Optional[dict] = None
         ) -> Optional[TaskCreationResult]:
         """
         Create a task via the orchestrator.
@@ -314,6 +365,7 @@ class Orchestrator(OrchestratorAPIClient):
             private_key: Optional. The wallet's private key, only used if auto_pay is True.
             preferred_cp_list: Optional. A list of preferred cp account address(es).
             ip_whitelist: Optional. A list of IP addresses which can access the application.
+            custom_instance: Optional. A dictionary containing custom instance information. If provided, instance_type is ignored.
         
         Raises:
             SwanExceptionError: If neither app_repo_image nor job_source_uri is provided.
@@ -335,14 +387,17 @@ class Orchestrator(OrchestratorAPIClient):
             if not duration or duration < 3600:
                 raise SwanAPIException(f"Duration must be no less than 3600 seconds")
 
-            if not instance_type:
-                instance_type = 'C1ae.small'
+            if custom_instance:
+                logging.info(f"Using custom instance {custom_instance}, {region=} {duration=} (seconds)")
+            else:
+                if not instance_type:
+                    instance_type = 'C1ae.small'
 
-            hardware_id = self.get_instance_hardware_id(instance_type)
-            if hardware_id is None:
-                raise SwanAPIException(f"Invalid instance_type {instance_type}")
+                hardware_id = self.get_instance_hardware_id(instance_type)
+                if hardware_id is None:
+                    raise SwanAPIException(f"Invalid instance_type {instance_type}")
 
-            logging.info(f"Using {instance_type} machine, {region=} {duration=} (seconds)")
+                logging.info(f"Using {instance_type} machine, {region=} {duration=} (seconds)")
 
             if not job_source_uri:
                 if app_repo_image:
@@ -362,6 +417,7 @@ class Orchestrator(OrchestratorAPIClient):
                             repo_branch=repo_branch,
                             wallet_address=wallet_address, 
                             instance_type=instance_type,
+                            custom_instance=custom_instance
                         )
                 else:
                     raise SwanAPIException(f"Please provide app_repo_image, or job_source_uri, or repo_uri")
@@ -419,8 +475,7 @@ class Orchestrator(OrchestratorAPIClient):
                 config_result = self.make_payment(
                     task_uuid=task_uuid, 
                     duration=duration, 
-                    private_key=private_key, 
-                    instance_type=instance_type
+                    private_key=private_key
                 )
                 if config_result and isinstance(config_result, dict):
                     tx_hash = config_result.get('tx_hash')
@@ -535,16 +590,11 @@ class Orchestrator(OrchestratorAPIClient):
             tx_hash
         """
         try:
-            # instance_type = self.get_task_instance_type(task_uuid)
             task_detail: TaskDetail = self.get_task_detail(task_uuid)
-            instance_type = task_detail.hardware
+            hardware_id = task_detail.hardware_id
             price_per_hour = float(task_detail.price_per_hour)
-            if not instance_type:
-                raise SwanAPIException(f"Invalid instance_type for task {task_uuid}")
-            
-            hardware_id = self.get_instance_hardware_id(instance_type)
             if hardware_id is None:
-                raise SwanAPIException(f"Invalid instance_type {instance_type}")
+                raise SwanAPIException(f"Invalid hardware_id for task {task_uuid}")
             
             if not private_key:
                 raise SwanAPIException(f"No private_key provided.")
@@ -559,7 +609,7 @@ class Orchestrator(OrchestratorAPIClient):
                 price_per_hour=price_per_hour,
                 duration=duration
             )
-            logging.info(f"Payment submitted, {task_uuid=}, {duration=}, {instance_type=}. Got {payment.tx_hash=}")
+            logging.info(f"Payment submitted, {task_uuid=}, {duration=}, {hardware_id=}. Got {payment.tx_hash=}")
             return payment
         except Exception as e:
             logging.error(str(e) + traceback.format_exc())
@@ -584,16 +634,11 @@ class Orchestrator(OrchestratorAPIClient):
             tx_hash
         """
         try:
-            # instance_type = self.get_task_instance_type(task_uuid)
             task_detail: TaskDetail = self.get_task_detail(task_uuid)
-            instance_type = task_detail.hardware
+            hardware_id = task_detail.hardware_id
             price_per_hour = float(task_detail.price_per_hour)
-            if not instance_type:
-                raise SwanAPIException(f"Invalid task info {task_uuid}")
-            
-            hardware_id = self.get_instance_hardware_id(instance_type)
             if hardware_id is None:
-                raise SwanAPIException(f"Invalid instance_type {instance_type}")
+                raise SwanAPIException(f"Invalid hardware_id {hardware_id}")
             
             if not private_key:
                 raise SwanAPIException(f"No private_key provided.")
@@ -608,7 +653,7 @@ class Orchestrator(OrchestratorAPIClient):
                 price_per_hour=price_per_hour,
                 duration=duration
             )
-            logging.info(f"Payment submitted, {task_uuid=}, {duration=}, {instance_type=}. Got {payment.tx_hash=}")
+            logging.info(f"Payment submitted, {task_uuid=}, {duration=}, {hardware_id=}. Got {payment.tx_hash=}")
             return payment
         except Exception as e:
             logging.error(str(e) + traceback.format_exc())
@@ -652,26 +697,22 @@ class Orchestrator(OrchestratorAPIClient):
             logging.error(str(e) + traceback.format_exc())
             return None
     
-    def make_payment(self, task_uuid, private_key, duration=3600, instance_type = None):
+    def make_payment(self, 
+                     task_uuid, 
+                     private_key, 
+                     duration=3600
+                     ):
         """
         Submit payment for a task and validate it on SWAN backend
 
         Args:
             task_uuid: unique id returned by `swan_api.create_task`
             duration: duration of service runtime (seconds).
-            instance_type: instance type, e.g. C1ae.small
         
         Returns:
             JSON response from backend server including 'task_uuid'.
         """
         try:
-            if not instance_type:
-                raise SwanAPIException(f"Invalid instance_type")
-            
-            hardware_id = self.get_instance_hardware_id(instance_type)
-            if hardware_id is None:
-                raise SwanAPIException(f"Invalid instance_type {instance_type}")
-            
             if not private_key:
                 raise SwanAPIException(f"No private_key provided.")
             if not self.contract_info:
@@ -681,7 +722,6 @@ class Orchestrator(OrchestratorAPIClient):
                 task_uuid=task_uuid, 
                 duration=duration, 
                 private_key=private_key, 
-                instance_type=instance_type
             ):
                 time.sleep(3)
                 if res := self.validate_payment(

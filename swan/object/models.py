@@ -81,6 +81,7 @@ class TaskDetail(Base):
     duration: Optional[int] = None
     end_at: Optional[int] = None
     hardware: Optional[str] = None
+    hardware_id: Optional[int] = None
     job_result_uri: Optional[str] = None
     job_source_uri: Optional[str] = None
     price_per_hour: Optional[str] = None
@@ -290,9 +291,10 @@ class TaskList(Base):
 
             task_list = []
             for _task_data in _list:
-                task_list.append(TaskInfo(
-                    _task_data if _task_data else {}
-                ))
+                if _task_data and isinstance(_task_data, dict):
+                    task_list.append(TaskInfo(
+                        **_task_data
+                    ))
 
             return TaskList(
                 task_list=task_list,
@@ -363,3 +365,74 @@ class PaymentResult(Base):
     tx_hash_approve: Optional[str] = None
     tx_hash: Optional[str] = None
     amount: Optional[float] = None
+
+@dataclass
+class GPUCount(Base):
+    gpu_model: Optional[str] = None
+    max_count: Optional[int] = None
+    region: Optional[str] = None
+
+    def to_dict(self):
+        return {k: v for k, v in super().to_dict().items() if v is not None}
+
+@dataclass
+class GPUSelectionList(Base):
+    gpu_list: Optional[List[GPUCount]] = field(default_factory=list)
+
+    @staticmethod
+    def load_from_resp(result: Dict[str, Any]) -> 'GPUSelectionList':
+        try:
+            data = result.get('data', {})
+            _list = data.get('gpus') if data else []
+
+            gpu_list = []
+            for _task_data in _list:
+                if _task_data and isinstance(_task_data, dict):
+                    gpu_list.append(GPUCount(
+                        **_task_data
+                    ))
+
+            return GPUSelectionList(
+                gpu_list=gpu_list
+            )
+        except Exception as e:
+            raise ValueError(f"An error occurred while loading GPUSelectionList: {e}")
+        
+    def to_dict(self):
+        gpu_list = [gpu.to_dict() for gpu in self.gpu_list]
+        return {
+            'gpu_list': gpu_list
+        }
+        
+
+@dataclass
+class CustomInstance(Base):
+    cpu: Optional[int] = None
+    gpu_count: Optional[int] = None
+    gpu_model: Optional[str] = None
+    memory: Optional[int] = None
+    region: Optional[str] = None
+    storage: Optional[int] = None
+
+@dataclass
+class CustomInstanceResult(Base):
+    available: Optional[bool] = None
+    custom_instance: Optional[CustomInstance] = field(default_factory=CustomInstance)
+    price_expiry_time: Optional[str] = None
+    price_per_hour: Optional[float] = None
+
+    @staticmethod
+    def load_from_resp(result: Dict[str, Any]) -> 'CustomInstanceResult':
+        try:
+            data = result.get('data', {})
+            custom_instance = data.get('custom_instance') if data else {}
+            custom_instance = dict_to_dataclass(CustomInstance, custom_instance) if custom_instance else CustomInstance()
+
+            return CustomInstanceResult(
+                available=data.get('available'),
+                custom_instance=custom_instance,
+                price_expiry_time=data.get('price_expiry_time'),
+                price_per_hour=data.get('price_per_hour')
+            )
+        except Exception as e:
+            raise ValueError(f"An error occurred while loading ConfigResponse: {e}")

@@ -11,5 +11,7 @@ from swan.object.models import (
     TaskRenewalResult,
     TaskTerminationMessage,
     PaymentResult,
-    TaskDetail
+    TaskDetail,
+    GPUSelectionList,
+    CustomInstanceResult
 )

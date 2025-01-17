@@ -425,6 +425,8 @@ class Orchestrator(OrchestratorAPIClient):
 
             if not job_source_uri:
                 raise SwanAPIException(f"Cannot get job_source_uri. Please double check your parameters")
+            
+            logging.info(f"Using job_source_uri: {job_source_uri}")
 
             preferred_cp = None
             if preferred_cp_list and isinstance(preferred_cp_list, list):
@@ -437,36 +439,44 @@ class Orchestrator(OrchestratorAPIClient):
                     if not validate_ip_or_cidr(ip):
                         raise SwanAPIException(f"Invalid ip address: {ip}")
                 ip_whitelist_str = ','.join(ip_whitelist)
-            
-            if self._verify_hardware_region(instance_type, region):
-                params = {
-                    "duration": duration,
-                    "cfg_name": instance_type,
-                    "region": region,
-                    "start_in": start_in,
-                    "wallet": wallet_address,
-                    "job_source_uri": job_source_uri
-                }
-                if preferred_cp:
-                    params["preferred_cp"] = preferred_cp
-                if ip_whitelist_str:
-                    params["ip_whitelist"] = ip_whitelist_str
-                result = self._request_with_params(
-                    POST, 
-                    CREATE_TASK, 
-                    self.swan_url, 
-                    params, 
-                    self.token, 
-                    None
-                )
-                try:
-                    task_uuid = result['data']['task']['uuid']
-                except Exception as e:
-                    err_msg = f"Task creation failed, {str(e)}."
-                    raise SwanAPIException(err_msg)
+
+            # create task deployment
+            params = {
+                "duration": duration,
+                "cfg_name": instance_type,
+                "region": region,
+                "start_in": start_in,
+                "wallet": wallet_address,
+                "job_source_uri": job_source_uri
+            }
+            if preferred_cp:
+                params["preferred_cp"] = preferred_cp
+            if ip_whitelist_str:
+                params["ip_whitelist"] = ip_whitelist_str
+
+            if custom_instance:
+                params["custom_instance"] = json.dumps(custom_instance)
+                custom_instance_result: CustomInstanceResult = self.get_custom_instance_result(custom_instance, region)
+                if not custom_instance_result.available:
+                    raise SwanAPIException(f"Custom instance {custom_instance} is not available in {region}.")
             else:
-                err_msg = f"No {instance_type} machine in {region}."
-                raise SwanAPIException(err_msg)
+                if not self._verify_hardware_region(instance_type, region):
+                    raise SwanAPIException(f"No {instance_type} machine in {region}.")
+            
+            result = self._request_with_params(
+                POST, 
+                CREATE_TASK, 
+                self.swan_url, 
+                params, 
+                self.token, 
+                None
+            )
+
+
+            try:
+                task_uuid = result['data']['task']['uuid']
+            except Exception as e:
+                raise SwanAPIException(f"Task creation failed, {str(e)}.")
         
             tx_hash = None
             tx_hash_approve = None

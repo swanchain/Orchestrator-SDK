@@ -225,11 +225,12 @@ class Orchestrator(OrchestratorAPIClient):
             gpu_count = custom_instance.get("gpu_count", 1)
 
             try:
-                cpu = int(custom_instance.get("cpu", 2))
-                memory = int(custom_instance.get("memory", 2))
-                storage = int(custom_instance.get("storage", 5))
+                cpu = int(custom_instance.get("cpu"))
+                memory = int(custom_instance.get("memory"))
+                storage = int(custom_instance.get("storage"))
             except Exception as e:
                 logging.error("Incorrect type of input, cpu, memory and storage should be integer")
+                return None
             
             params = {
                 "cpu": cpu,

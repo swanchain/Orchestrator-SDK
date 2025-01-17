@@ -293,7 +293,7 @@ class TaskList(Base):
             for _task_data in _list:
                 if _task_data and isinstance(_task_data, dict):
                     task_list.append(TaskInfo(
-                        **_task_data
+                        _task_data
                     ))
 
             return TaskList(
@@ -372,6 +372,11 @@ class GPUCount(Base):
     max_count: Optional[int] = None
     region: Optional[str] = None
 
+    def __init__(self, data: Dict[str, Any]):
+        self.gpu_model = data.get('gpu_model')
+        self.max_count = data.get('max_count')
+        self.region = data.get('region')
+
     def to_dict(self):
         return {k: v for k, v in super().to_dict().items() if v is not None}
 
@@ -389,7 +394,7 @@ class GPUSelectionList(Base):
             for _task_data in _list:
                 if _task_data and isinstance(_task_data, dict):
                     gpu_list.append(GPUCount(
-                        **_task_data
+                        _task_data
                     ))
 
             return GPUSelectionList(
